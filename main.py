@@ -13,11 +13,12 @@ pygame.init()
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 60
-PLAYER_SPEED = 6
+PLAYER_SPEED = 5
 GRAVITY = 0.5
-JUMP_STRENGTH = 15
-MAX_LEVEL = 3
-DOUBLE_JUMP_STRENGTH = 13  # Slightly lower strength for double jump
+JUMP_STRENGTH = 12
+MAX_LEVEL = 4
+DOUBLE_JUMP_STRENGTH = 10
+BOOSTED_SPEED = 8
 
 # Colors
 WHITE = (255, 255, 255)
@@ -27,6 +28,7 @@ GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
 YELLOW = (255, 255, 0)
 GRAY = (100, 100, 100)
+LIGHT_GRAY = (200, 200, 200)
 PURPLE = (128, 0, 128)
 CYAN = (0, 255, 255)
 ORANGE = (255, 165, 0)
@@ -83,14 +85,30 @@ class Player(pygame.sprite.Sprite):
         self.trail = []
         self.trail_timer = 0
         
+        # Power-up effects
+        self.has_speed_boost = False
+        self.speed_boost_timer = 0
+        self.speed_boost_duration = 5 * FPS  # 5 seconds at 60 FPS
+        self.normal_speed = PLAYER_SPEED
+        self.boosted_speed = PLAYER_SPEED * 1.7  # 70% speed increase
+        
     def update(self, platforms):
+        # Update power-up effects
+        if self.has_speed_boost:
+            self.speed_boost_timer -= 1
+            if self.speed_boost_timer <= 0:
+                self.has_speed_boost = False
+        
         # Trail effect
         self.trail_timer += 1
-        if self.trail_timer > 3:  # Add trail position every few frames
+        trail_frequency = 2 if self.has_speed_boost else 3  # More frequent trail when speed boosted
+        if self.trail_timer > trail_frequency:
             self.trail_timer = 0
             # Only add trail when moving
             if abs(self.vel_x) > 0 or abs(self.vel_y) > 0:
-                self.trail.append([self.rect.centerx, self.rect.centery, 15])  # x, y, lifetime
+                trail_color = (0, 255, 255) if self.has_speed_boost else (100, 200, 255)
+                # Store x, y, lifetime, and color for the trail
+                self.trail.append([self.rect.centerx, self.rect.centery, 15, trail_color])
         
         # Update trail positions
         for i, trail in enumerate(self.trail):
@@ -101,7 +119,8 @@ class Player(pygame.sprite.Sprite):
         
         # Animation
         self.animation_timer += 1
-        if self.animation_timer > 10:  # Change frame every 10 ticks
+        animation_speed = 5 if self.has_speed_boost else 10  # Faster animation when boosted
+        if self.animation_timer > animation_speed:
             self.animation_timer = 0
             self.frame_index = (self.frame_index + 1) % len(self.frames)
             if self.vel_x != 0:  # Only animate when moving
@@ -116,6 +135,15 @@ class Player(pygame.sprite.Sprite):
         elif self.vel_x > 0 and not self.facing_right:
             self.facing_right = True
             self.image = pygame.transform.flip(self.image, True, False)
+        
+        # Speed boost effect on the player's appearance
+        if self.has_speed_boost:
+            # Create a copy of the image with a cyan glow
+            boosted_image = self.image.copy()
+            glow_surface = pygame.Surface((self.rect.width + 10, self.rect.height + 10), pygame.SRCALPHA)
+            pygame.draw.rect(glow_surface, (0, 255, 255, 100), (0, 0, self.rect.width + 10, self.rect.height + 10), border_radius=5)
+            # Keep the original image but add the glow around it
+            self.image = boosted_image
             
         # Apply gravity
         self.vel_y += GRAVITY
@@ -164,11 +192,22 @@ class Player(pygame.sprite.Sprite):
             self.can_double_jump = False
     
     def draw_trail(self, surface):
-        for x, y, lifetime in self.trail:
+        for x, y, lifetime, color in self.trail:
             # Fade based on lifetime
             alpha = min(255, lifetime * 17)  
+            # Get the color with alpha
+            color_with_alpha = (*color[:3], alpha)
             # Draw trail particle
-            pygame.draw.circle(surface, (100, 200, 255, alpha), (x, y), max(1, lifetime//5))
+            pygame.draw.circle(surface, color_with_alpha, (x, y), max(1, lifetime//4))
+            
+    def activate_speed_boost(self):
+        self.has_speed_boost = True
+        self.speed_boost_timer = self.speed_boost_duration
+    
+    def get_current_speed(self):
+        if self.has_speed_boost:
+            return self.boosted_speed
+        return self.normal_speed
 
 
 class Platform(pygame.sprite.Sprite):
@@ -186,6 +225,34 @@ class Platform(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
+
+
+class MovingPlatform(Platform):
+    def __init__(self, x, y, width, height, move_x=0, move_y=0, distance=100, speed=2, color=PURPLE):
+        super().__init__(x, y, width, height, color)
+        self.move_x = move_x  # Direction of movement in x-axis (-1, 0, 1)
+        self.move_y = move_y  # Direction of movement in y-axis (-1, 0, 1)
+        self.distance = distance  # Maximum distance to move
+        self.speed = speed  # Movement speed
+        self.start_x = x
+        self.start_y = y
+        self.moved_distance = 0
+        self.direction = 1  # 1 for forward, -1 for backward
+    
+    def update(self):
+        # Calculate movement
+        if self.move_x != 0:
+            self.rect.x += self.speed * self.direction * self.move_x
+            self.moved_distance += self.speed * abs(self.move_x)
+        
+        if self.move_y != 0:
+            self.rect.y += self.speed * self.direction * self.move_y
+            self.moved_distance += self.speed * abs(self.move_y)
+        
+        # Check if we need to change direction
+        if self.moved_distance >= self.distance:
+            self.direction *= -1  # Reverse direction
+            self.moved_distance = 0
 
 
 class FinishLine(pygame.sprite.Sprite):
@@ -252,6 +319,46 @@ class Coin(pygame.sprite.Sprite):
         self.rect.y = y
 
 
+class PowerUp(pygame.sprite.Sprite):
+    def __init__(self, x, y, power_type="speed"):
+        super().__init__()
+        self.type = power_type
+        self.image = pygame.Surface((20, 20), pygame.SRCALPHA)
+        
+        if power_type == "speed":
+            # Draw a lightning bolt
+            color = (0, 255, 255)  # Cyan
+            points = [(10, 0), (0, 10), (8, 10), (3, 20), (20, 7), (12, 7), (16, 0)]
+            pygame.draw.polygon(self.image, color, points)
+            # Add a glow effect
+            self.glow_surface = pygame.Surface((30, 30), pygame.SRCALPHA)
+            pygame.draw.circle(self.glow_surface, (0, 255, 255, 100), (15, 15), 15)
+        
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+        
+        # Animation
+        self.animation_timer = 0
+        self.hover_offset = 0
+        self.hover_dir = 1
+    
+    def update(self):
+        # Hovering animation
+        self.animation_timer += 1
+        if self.animation_timer >= 5:
+            self.animation_timer = 0
+            self.hover_offset += 0.5 * self.hover_dir
+            if abs(self.hover_offset) >= 5:
+                self.hover_dir *= -1
+        
+        # Adjust position for hover effect
+        self.rect.y = self.rect.y - self.hover_dir * 0.2
+    
+    def draw_glow(self, surface):
+        surface.blit(self.glow_surface, (self.rect.x - 5, self.rect.y - 5))
+
+
 class Game:
     def __init__(self):
         # Create groups for sprites
@@ -260,6 +367,7 @@ class Game:
         self.hazards = pygame.sprite.Group()
         self.finish_group = pygame.sprite.Group()
         self.coins = pygame.sprite.Group()
+        self.powerups = pygame.sprite.Group()
         
         # Create player
         self.player = Player(50, 300)
@@ -277,6 +385,10 @@ class Game:
         self.start_time = 0
         self.current_time = 0
         self.best_times = self.load_best_times()
+        
+        # Power-up effects
+        self.powerup_message = ""
+        self.powerup_message_timer = 0
     
     def reset_level(self):
         # Clear all sprites
@@ -285,6 +397,7 @@ class Game:
         self.hazards.empty()
         self.finish_group.empty()
         self.coins.empty()
+        self.powerups.empty()
         
         # Reset player
         self.player = Player(50, 300)
@@ -293,6 +406,10 @@ class Game:
         # Reset coins collected
         self.collected_coins = 0
         self.total_coins = 0
+        
+        # Reset power-up message
+        self.powerup_message = ""
+        self.powerup_message_timer = 0
         
         # Create level
         self.create_level(self.current_level)
@@ -306,8 +423,10 @@ class Game:
             self.finish = FinishLine(700, 500)
         elif level_num == 2:
             self.finish = FinishLine(700, 300)
-        else:
+        elif level_num == 3:
             self.finish = FinishLine(700, 90)  # Moved finish line above the platform at y=150
+        elif level_num == 4:
+            self.finish = FinishLine(700, 50)  # Level 4 finish line
         
         self.all_sprites.add(self.finish)
         self.finish_group.add(self.finish)
@@ -341,6 +460,12 @@ class Game:
                 (250, 320),
                 (450, 220),
             ]
+            
+            # No power-ups in level 1 (tutorial level)
+            powerups_pos = []
+            
+            # No moving platforms in level 1
+            moving_platforms = []
             
         elif level_num == 2:
             # Level 2 - Medium difficulty
@@ -376,7 +501,15 @@ class Game:
                 (600, 120),
             ]
             
-        else:  # Level 3
+            # Add a single speed power-up in level 2 as introduction
+            powerups_pos = [
+                (350, 220, "speed"),
+            ]
+            
+            # No moving platforms in level 2
+            moving_platforms = []
+            
+        elif level_num == 3:
             # Level 3 - Hard challenge but actually possible to complete
             platforms = [
                 (100, 500, 70, 20),
@@ -414,12 +547,84 @@ class Game:
                 (400, 120),
                 (550, 70),
             ]
+            
+            # Add two speed power-ups in level 3 in strategic locations
+            powerups_pos = [
+                (250, 220, "speed"),
+                (600, 70, "speed")
+            ]
+            
+            # Add 1 easy moving platform to introduce the concept
+            moving_platforms = [
+                # X, Y, Width, Height, Move X, Move Y, Distance, Speed
+                (450, 350, 80, 20, 1, 0, 100, 1)  # Horizontal moving platform
+            ]
+            
+        else:  # Level 4 - New extreme challenge level with moving platforms
+            # Level 4 - Extreme challenge with moving platforms
+            platforms = [
+                (100, 500, 60, 20),
+                (250, 450, 60, 20),
+                (550, 350, 60, 20),
+                (680, 300, 60, 20),  # Platform near finish
+                (250, 200, 60, 20),
+                (100, 150, 60, 20),
+                (400, 150, 60, 20),
+                (700, 70, 60, 20),   # Platform at finish
+            ]
+            
+            # More hazards in level 4
+            hazards = [
+                (180, 520, 50, 20),
+                (330, 460, 50, 20),
+                (480, 410, 50, 20),
+                (630, 360, 50, 20),
+                (180, 210, 50, 20),
+                (30, 160, 50, 20),
+                (330, 160, 50, 20),
+                (480, 110, 50, 20),
+                (650, 80, 40, 20),
+            ]
+            
+            coins_pos = [
+                (100, 470),
+                (250, 420),
+                (550, 320),
+                (680, 270),
+                (250, 170),
+                (100, 120),
+                (400, 120),
+                (550, 70),
+                (650, 40),
+            ]
+            
+            # More power-ups in level 4 to help with the difficulty
+            powerups_pos = [
+                (150, 450, "speed"),
+                (600, 300, "speed"),
+                (200, 140, "speed")
+            ]
+            
+            # Add challenging moving platforms for level 4
+            moving_platforms = [
+                # X, Y, Width, Height, Move X, Move Y, Distance, Speed
+                (400, 400, 70, 20, 1, 0, 150, 2),    # Fast horizontal platform
+                (400, 250, 70, 20, 0, 1, 100, 2),    # Vertical platform
+                (550, 100, 70, 20, 1, 0, 100, 3),    # Very fast horizontal platform
+                (300, 350, 70, 20, 1, 1, 80, 1.5),   # Diagonal platform
+            ]
         
         # Create platforms
         for x, y, w, h in platforms:
             platform = Platform(x, y, w, h)
             self.all_sprites.add(platform)
             self.platforms.add(platform)
+            
+        # Create moving platforms
+        for x, y, w, h, move_x, move_y, distance, speed in moving_platforms:
+            moving_platform = MovingPlatform(x, y, w, h, move_x, move_y, distance, speed)
+            self.all_sprites.add(moving_platform)
+            self.platforms.add(moving_platform)
         
         # Create hazards
         for x, y, w, h in hazards:
@@ -433,6 +638,14 @@ class Game:
             self.all_sprites.add(coin)
             self.coins.add(coin)
             self.total_coins += 1
+            
+        # Create power-ups
+        for x, y, power_type in powerups_pos:
+            powerup = PowerUp(x, y, power_type)
+            self.all_sprites.add(powerup)
+            self.powerups.add(powerup)
+            
+        # MAX_LEVEL is now defined at the top of the file, no need to update it here
     
     def load_best_times(self):
         best_times = {}
@@ -440,7 +653,8 @@ class Game:
             if os.path.exists("best_times.json"):
                 with open("best_times.json", "r") as f:
                     best_times = json.load(f)
-        except Exception:
+        except Exception as e:
+            print(f"Error loading best times: {e}")
             pass
         
         # Initialize any missing levels
@@ -630,12 +844,29 @@ class Game:
                 keys = pygame.key.get_pressed()
                 self.player.vel_x = 0
                 if keys[pygame.K_LEFT]:
-                    self.player.vel_x = -PLAYER_SPEED
+                    self.player.vel_x = -self.player.get_current_speed()
                 if keys[pygame.K_RIGHT]:
-                    self.player.vel_x = PLAYER_SPEED
+                    self.player.vel_x = self.player.get_current_speed()
                 
                 # Update player
                 self.player.update(self.platforms)
+                
+                # Update power-ups
+                self.powerups.update()
+                
+                # Check for power-up collection
+                powerup_hits = pygame.sprite.spritecollide(self.player, self.powerups, True)
+                for powerup in powerup_hits:
+                    if powerup.type == "speed":
+                        self.player.activate_speed_boost()
+                        self.powerup_message = "Speed Boost activated!"
+                        self.powerup_message_timer = 90  # Show for 1.5 seconds (90 frames)
+                
+                # Update power-up message timer
+                if self.powerup_message_timer > 0:
+                    self.powerup_message_timer -= 1
+                    if self.powerup_message_timer <= 0:
+                        self.powerup_message = ""
                 
                 # Check for coin collection
                 coin_hits = pygame.sprite.spritecollide(self.player, self.coins, True)
@@ -672,6 +903,10 @@ class Game:
                 # Draw finish line arrow
                 self.finish.draw_arrow(screen)
                 
+                # Draw power-up glows
+                for powerup in self.powerups:
+                    powerup.draw_glow(screen)
+                
                 # Draw UI
                 # Timer
                 timer_text = font.render(f"Time: {self.format_time(self.current_time)}", True, WHITE)
@@ -689,6 +924,17 @@ class Game:
                 # Level indicator
                 level_text = font.render(f"Level {self.current_level}", True, WHITE)
                 screen.blit(level_text, (SCREEN_WIDTH - level_text.get_width() - 10, 10))
+                
+                # Power-up indicator
+                if self.player.has_speed_boost:
+                    boost_time = self.player.speed_boost_timer // 60  # Convert frames to seconds
+                    boost_text = font.render(f"Speed Boost: {boost_time}s", True, (0, 255, 255))
+                    screen.blit(boost_text, (SCREEN_WIDTH - boost_text.get_width() - 10, 40))
+                
+                # Power-up message
+                if self.powerup_message:
+                    message_text = font.render(self.powerup_message, True, (0, 255, 255))
+                    screen.blit(message_text, (SCREEN_WIDTH//2 - message_text.get_width()//2, 100))
                 
                 # Controls reminder
                 controls_text = font.render("Arrows: Move | Space: Jump (x2) | R: Reset | ESC: Menu", True, WHITE)
