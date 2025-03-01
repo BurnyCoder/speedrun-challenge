@@ -26,3 +26,18 @@ python main.py
 - Spacebar: Jump
 - R: Reset level
 - ESC: Quit game 
+
+## Development
+This is the development branch where new features are implemented before being merged into the main branch.
+
+### Planned Features
+- Additional levels
+- New hazards and obstacles
+- Power-ups
+- Custom level editor
+
+### Contributing
+If you'd like to contribute to the project, please:
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request 
